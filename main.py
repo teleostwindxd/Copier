@@ -24,18 +24,60 @@ def keep_alive():
 # --- DISCORD BOT SETUP ---
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True # NEW: Required to see the member list and detect when they join
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 DATA_FILE = "server_messages.json"
+ROLES_FILE = "server_roles.json" # NEW: File to store role data
 
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
 
+# --- NEW: AUTO-ROLE ON JOIN ---
+@bot.event
+async def on_member_join(member):
+    try:
+        # Load the saved roles file
+        with open(ROLES_FILE, "r", encoding="utf-8") as f:
+            roles_data = json.load(f)
+    except FileNotFoundError:
+        return  # If no roles were copied yet, do nothing
+
+    member_id = str(member.id)
+    if member_id in roles_data:
+        roles_to_add = []
+        for role_name in roles_data[member_id]:
+            # Find the matching role in the new server by its name
+            role = discord.utils.get(member.guild.roles, name=role_name)
+            if role:
+                roles_to_add.append(role)
+        
+        if roles_to_add:
+            try:
+                await member.add_roles(*roles_to_add)
+                print(f"Auto-assigned {len(roles_to_add)} roles to {member.display_name}")
+            except Exception as e:
+                print(f"Failed to assign roles to {member.display_name}. Make sure my bot role is at the TOP of the role list! Error: {e}")
+
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def copy(ctx):
-    await ctx.send("Starting the cloning process. Fetching all messages...")
+    await ctx.send("Starting the cloning process. Fetching messages and roles...")
+    
+    # --- NEW: SAVE MEMBER ROLES ---
+    roles_data = {}
+    for member in ctx.guild.members:
+        # Get role names (skipping the default @everyone role)
+        user_roles = [role.name for role in member.roles if role.name != "@everyone"]
+        if user_roles:
+            roles_data[str(member.id)] = user_roles
+            
+    with open(ROLES_FILE, "w", encoding="utf-8") as f:
+        json.dump(roles_data, f, indent=4)
+    print("Roles saved successfully.")
+    # ------------------------------
+
     all_messages = []
     
     for channel in ctx.guild.text_channels:
@@ -80,7 +122,7 @@ async def copy(ctx):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(server_data, f, indent=4)
         
-    await ctx.send("Copy complete! Data saved. Run `!paste` in the new server immediately.")
+    await ctx.send("Copy complete! Messages and Roles saved. Run `!paste` in the new server immediately.")
 
 @bot.command()
 @commands.has_permissions(administrator=True)
@@ -121,11 +163,11 @@ async def paste(ctx):
             
             await webhook.delete()
             
-    await ctx.send("Server perfectly cloned!")
+    await ctx.send("Server perfectly cloned! Auto-role is active for joining members.")
 
 # 1. Start the Flask keep-alive server in the background
 keep_alive()
 
 # 2. Boot the Discord bot on the main thread
 bot.run(os.environ.get('DISCORD_TOKEN'))
-                  
+            
